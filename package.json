@@ -1,0 +1,27 @@
+{
+	"name": "jupyter-bun",
+	"version": "0.1.0",
+	"description": "TypeScript Jupyter kernel powered by Bun.",
+	"license": "MIT",
+	"bin": "dist/index.ts",
+	"files": [
+		"dist"
+	],
+	"type": "module",
+	"scripts": {
+		"compile": "bun --bun tsdown",
+		"fix": "oxlint --silent --fix && oxfmt",
+		"check": "oxlint && oxfmt --check"
+	},
+	"dependencies": {
+		"oxc-parser": "^0.153.0"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.4.3",
+		"oxfmt": "^0.72.0",
+		"oxlint": "^1.87.0",
+		"oxlint-tsgolint": "^7.0.2004",
+		"tsdown": "^0.23.1",
+		"typescript": "^7.0.2"
+	}
+}

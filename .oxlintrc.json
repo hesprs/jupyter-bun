@@ -1,0 +1,174 @@
+{
+	"$schema": "./node_modules/oxlint/configuration_schema.json",
+	"plugins": ["unicorn", "typescript", "oxc", "import"],
+	"categories": {
+		"correctness": "warn",
+		"perf": "warn",
+		"nursery": "warn",
+		"suspicious": "warn",
+		"style": "warn",
+		"restriction": "warn",
+		"pedantic": "warn"
+	},
+	"rules": {
+		"typescript/prefer-readonly-parameter-types": "off",
+		"unicorn/no-array-sort": "off",
+		"unicorn/no-array-reverse": "off",
+		"typescript/no-unnecessary-condition": "off",
+		"typescript/consistent-return": "off",
+		"eslint/func-style": "off",
+		"eslint/max-statements": "off",
+		"import/no-named-export": "off",
+		"curly": ["warn", "multi"],
+		"eslint/no-ternary": "off",
+		"eslint/no-nested-ternary": "off",
+		"unicorn/no-nested-ternary": "off",
+		"typescript/array-type": ["warn", { "default": "generic" }],
+		"eslint/id-length": "off",
+		"eslint/init-declarations": "off",
+		"eslint/no-magic-numbers": "off",
+		"import/exports-last": "off",
+		"import/group-exports": "off",
+		"eslint/no-continue": "off",
+		"typescript/no-unsafe-type-assertion": "off",
+		"typescript/consistent-type-definitions": ["warn", "type"],
+		"typescript/parameter-properties": ["warn", { "prefer": "parameter-property" }],
+		"typescript/unbound-method": "off",
+		"eslint/prefer-destructuring": [
+			"warn",
+			{ "AssignmentExpression": { "array": false, "object": false } }
+		],
+		"unicorn/prefer-global-this": "off",
+		"eslint/no-new": "off",
+		"eslint/sort-imports": "off",
+		"eslint/no-duplicate-imports": ["warn", { "allowSeparateTypeImports": true }],
+		"eslint/new-cap": "off",
+		"typescript/consistent-type-imports": "off",
+		"react/jsx-max-depth": "off",
+		"react/react-in-jsx-scope": "off",
+		"unicorn/no-await-expression-member": "off",
+		"eslint/no-await-in-loop": "off",
+		"eslint/max-params": ["warn", { "max": 4 }],
+		"unicorn/filename-case": [
+			"warn",
+			{
+				"cases": {
+					"kebabCase": true,
+					"camelCase": false,
+					"snakeCase": false,
+					"pascalCase": true
+				},
+				"ignore": ["zg-Hans.ts", "zh-Hant.ts"]
+			}
+		],
+		"unicorn/consistent-function-scoping": "off",
+		"react/jsx-props-no-spreading": "off",
+		"import/no-unassigned-import": [
+			"warn",
+			{ "allow": ["**/*.css", "**/*.scss", "**/*.less", "tsdown/client"] }
+		],
+		"eslint/no-underscore-dangle": [
+			"warn",
+			{ "allow": ["__root__", "__assign__", "__getModule__", "__addModule__"] }
+		],
+		"unicorn/number-literal-case": "off",
+		"eslint/no-multi-assign": "off",
+		"react/jsx-handler-names": "off",
+		"typescript/method-signature-style": ["warn", "property"],
+		"typescript/explicit-module-boundary-types": "off",
+		"typescript/explicit-member-accessibility": ["warn", { "accessibility": "no-public" }],
+		"typescript/explicit-function-return-type": "off",
+		"typescript/promise-function-async": "off",
+		"eslint/no-void": "off",
+		"eslint/no-use-before-define": "off",
+		"unicorn/no-abusive-eslint-disable": "off",
+		"eslint/no-undefined": "off",
+		"oxc/no-optional-chaining": "off",
+		"eslint/no-empty-function": ["warn", { "allow": ["arrowFunctions"] }],
+		"oxc/no-async-await": "off",
+		"oxc/no-rest-spread-properties": "off",
+		"import/no-default-export": "off",
+		"import/no-relative-parent-imports": "off",
+		"unicorn/no-array-for-each": "off",
+		"eslint/default-case": "off",
+		"eslint/no-plusplus": "off",
+		"eslint/no-bitwise": "off",
+		"eslint/no-param-reassign": "off",
+		"eslint/complexity": "off",
+		"typescript/non-nullable-type-assertion-style": "off",
+		"import/unambiguous": "off",
+		"typescript/no-dynamic-delete": "off",
+		"typescript/no-invalid-void-type": "off",
+		"eslint/max-lines-per-function": "off",
+		"unicorn/no-array-callback-reference": "off",
+		"import/max-dependencies": "off",
+		"typescript/no-confusing-void-expression": "off",
+		"eslint/max-classes-per-file": "off",
+		"typescript/strict-boolean-expressions": "off",
+		"eslint/require-unicode-regexp": ["warn", { "requireFlag": "u" }],
+		"typescript/strict-void-return": "off",
+		"unicorn/explicit-length-check": "off",
+		"eslint/max-lines": ["warn", { "max": 500 }],
+		"typescript/prefer-nullish-coalescing": ["warn", { "ignorePrimitives": true }],
+		"unicorn/prefer-query-selector": "off",
+		"eslint/no-inline-comments": "off",
+		"unicorn/prefer-number-coercion": "off",
+		"prefer-promise-reject-errors": "off", // Has TypeScript equivalence
+		"eslint/no-throw-literal": "off", // Officially deprecated
+		"eslint/max-depth": "off",
+		"typescript/switch-exhaustiveness-check": "off",
+		"eslint/no-loop-func": "off",
+		"eslint/radix": "off",
+		"unicorn/import-style": "off",
+		"eslint/no-eval": "off",
+		"eslint/no-console": "off",
+		"import/no-nodejs-modules": "off",
+		"unicorn/no-process-exit": "off",
+		"eslint/one-var": ["warn", "never"],
+		"unicorn/max-nested-calls": ["warn", { "max": 5 }],
+		"eslint/require-await": "off", // overlaps with typescript
+		"typescript/ban-types": "off"
+	},
+	"env": {
+		"builtin": true,
+		"node": true
+	},
+	"globals": {
+		"Bun": "readonly",
+		"process": "readonly"
+	},
+	"overrides": [
+		{
+			"files": ["*.test.ts"],
+			"plugins": ["unicorn", "typescript", "oxc", "import", "vitest"],
+			"rules": {
+				"jest/prefer-expect-assertions": "off",
+				"vitest/prefer-expect-assertions": "off",
+				"vitest/no-importing-vitest-globals": "off",
+				"vitest/prefer-import-in-mock": "off",
+				"jest/no-untyped-mock-factory": "off",
+				"vitest/require-mock-type-parameters": "off",
+				"vitest/prefer-to-be-truthy": "off",
+				"vitest/prefer-to-be-falsy": "off",
+				"vitest/prefer-describe-function-title": "off",
+				"jest/max-expects": "off",
+				"vitest/max-expects": "off",
+				"jest/prefer-ending-with-an-expect": "off",
+				"jest/no-conditional-expect": "off",
+				"vitest/no-conditional-expect": "off",
+				"jest/require-hook": "off",
+				"vitest/prefer-called-once": "off",
+				"import/no-namespace": "off",
+				"vitest/prefer-importing-vitest-globals": "off",
+				"vitest/require-hook": "off",
+				"eslint/max-lines": ["warn", { "max": 2000 }],
+				"typescript/only-throw-error": "off"
+			}
+		}
+	],
+	"ignorePatterns": ["**/node_modules/**", "**/dist/**", "*.js"],
+	"options": {
+		"typeAware": true,
+		"typeCheck": true
+	}
+}
