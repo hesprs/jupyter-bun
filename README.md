@@ -2,6 +2,8 @@
 
 Modern TypeScript/JavaScript Jupyter kernel powered by Bun.
 
+Currently there are no Bun-native Jupyter kernels, all Node-compatible kernels have been abandoned for years; the only choice was [Deno](https://github.com/denoland/deno), which needs to install yet another JavaScript runtime. So I made this project simply for "scratching an itch": make TypeScript + Jupyter Notebook work natively in Bun-primary workflows.
+
 ## Origin
 
 The ZMTP transport and Jupyter protocol layer are ported from Deno's
@@ -16,21 +18,11 @@ Ported from Deno commit [`c39f1798`](https://github.com/denoland/deno/commit/c39
 
 ```sh
 # Install kernelspec
-bun src/index.ts install
+bun jupyter-bun install
 
 # Run kernel with a connection file
-bun src/index.ts <connection-file>
+bun jupyter-bun <connection-file>
 ```
-
-## Test
-
-```sh
-bun test/client.ts
-```
-
-Custom ZMTP client exercises all channels: kernel_info, execute (TS, imports,
-let re-declaration, await, destructuring, classes, functions, errors),
-complete, is_complete.
 
 ## Dependencies
 
