@@ -1,19 +1,29 @@
 /**
- * Code executor: Bun.Transpiler + oxc-parser REPL transform + indirect eval.
+ * Code executor: Bun.Transpiler + oxc-parser REPL transform + vm.runInThisContext.
  *
  * Pipeline:
  * 1. Bun.Transpiler strips TypeScript types → JS
  * 2. oxc-parser parses JS → ESTree AST with source positions
  * 3. AST transform: let/const→var (hoist+assign), import→await import(), class→var+expression
- * 4. Indirect eval (0, eval)() in global scope — var persists + re-declares
+ * 4. vm.runInThisContext in global scope — var persists + re-declares + timeout safety net
  */
 
+import process from 'node:process';
+import vm from 'node:vm';
 import { parseSync } from 'oxc-parser';
 
-const evalCode = (code: string): unknown => (0, eval)(code) as unknown;
+/** Execute code in global scope with import() support.
+ *
+ * breakOnSigint is a no-op in current Bun but will enable reactive sync interrupt when implemented.
+ */
+function runCode(code: string): unknown {
+	return vm.runInThisContext(code, {
+		breakOnSigint: true,
+		importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
+	}) as unknown;
+}
 
 declare global {
-	// eslint-disable-next-line no-var
 	var $result: unknown;
 }
 
@@ -22,7 +32,20 @@ export type StreamOutput = {
 	text: string;
 };
 
+export type DisplayData = {
+	data: Record<string, string>;
+	metadata: Record<string, string>;
+	transient: { display_id?: string };
+	update?: boolean;
+};
+
+export type ExecuteOptions = {
+	inputRequest?: (prompt: string, password?: boolean) => Promise<string | undefined>;
+	publishDisplay?: (data: DisplayData) => Promise<void>;
+};
+
 export type ExecutionResult = {
+	displayData: Array<DisplayData>;
 	error?: { message: string; name: string; stack?: Array<string> };
 	outputs: Array<StreamOutput>;
 	result?: unknown;
@@ -42,6 +65,20 @@ function formatValue(v: unknown): string {
 	if (typeof v === 'string') return v;
 	if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint') return String(v);
 	return Bun.inspect(v).trim();
+}
+
+const JUPYTER_DISPLAY = Symbol.for('Jupyter.display');
+
+/** Build a MIME bundle from a value: checks for [Symbol.for("Jupyter.display")] method. */
+export function mimeBundle(value: unknown): Record<string, string> {
+	if (value !== null && (typeof value === 'object' || typeof value === 'function')) {
+		const fn = (value as Record<symbol, unknown>)[JUPYTER_DISPLAY];
+		if (typeof fn === 'function') {
+			const bundle = (fn as () => unknown)();
+			if (bundle && typeof bundle === 'object') return bundle as Record<string, string>;
+		}
+	}
+	return { 'text/plain': formatValue(value) };
 }
 
 /** Extract all binding names from a destructuring pattern. */
@@ -99,7 +136,25 @@ function hasAsyncNode(node: unknown): boolean {
 }
 
 function replTransform(transpiler: Bun.Transpiler, source: string): string {
-	const jsCode = transpiler.transformSync(source);
+	// Pre-process: wrap last expression in $result = (...) to prevent
+	// Bun.Transpiler from tree-shaking trailing expression statements.
+	let modifiedSource = source;
+	const tsParsed = parseSync('cell.ts', source, { sourceType: 'module' });
+	if (!tsParsed.errors || tsParsed.errors.length === 0) {
+		const tsBody = tsParsed.program.body as Array<AnyNode>;
+		if (tsBody.length > 0) {
+			const lastStmt = tsBody.at(-1);
+			if (lastStmt?.type === 'ExpressionStatement' && lastStmt.expression) {
+				const expr = lastStmt.expression as AnyNode;
+				modifiedSource = `${source.slice(0, expr.start)}$result = (${source.slice(
+					expr.start,
+					expr.end,
+				)})${source.slice(expr.end)}`;
+			}
+		}
+	}
+
+	const jsCode = transpiler.transformSync(modifiedSource);
 	const { program, errors } = parseSync('cell.js', jsCode, { sourceType: 'module' });
 	if (errors && errors.length > 0) throw new Error(errors[0]?.message);
 
@@ -107,10 +162,8 @@ function replTransform(transpiler: Bun.Transpiler, source: string): string {
 	const bodyParts: Array<string> = [];
 	let needsAsync = false;
 	const body = program.body as Array<AnyNode>;
-	const lastIdx = body.length - 1;
 
-	for (let idx = 0; idx < body.length; idx++) {
-		const node = body[idx];
+	for (const node of body) {
 		if (node.type.startsWith('TS')) continue;
 
 		if (hasAsyncNode(node)) needsAsync = true;
@@ -158,12 +211,7 @@ function replTransform(transpiler: Bun.Transpiler, source: string): string {
 			bodyParts.push(`${name} = ${classExpr};`);
 		} else if (node.type === 'FunctionDeclaration')
 			hoisted.push(jsCode.slice(node.start, node.end));
-		else {
-			const text = jsCode.slice(node.start, node.end);
-			if (idx === lastIdx && node.type === 'ExpressionStatement')
-				bodyParts.push(`$result = ${text}`);
-			else bodyParts.push(text);
-		}
+		else bodyParts.push(jsCode.slice(node.start, node.end));
 	}
 
 	const hoistedCode = hoisted.join(' ');
@@ -176,7 +224,7 @@ function replTransform(transpiler: Bun.Transpiler, source: string): string {
 function cleanStack(stack: string): Array<string> {
 	return stack
 		.split('\n')
-		.filter((line) => !line.includes('executor.ts') && !line.includes('eval'))
+		.filter((line) => !line.includes('executor.ts') && !line.includes('node:vm'))
 		.map((line) => line.trim())
 		.filter(Boolean);
 }
@@ -186,17 +234,25 @@ export class Executor {
 	private executing = false;
 	private rejectInterrupt: ((err: Error) => void) | undefined;
 
-	async execute(code: string): Promise<ExecutionResult> {
+	async execute(code: string, options?: ExecuteOptions): Promise<ExecutionResult> {
 		if (this.executing) throw new Error('execution already in progress');
 		this.executing = true;
 
 		const outputs: Array<StreamOutput> = [];
+		const displayData: Array<DisplayData> = [];
+		const pendingDisplays: Array<Promise<void>> = [];
 
 		const con = globalThis.console;
 		const origLog = con.log;
 		const origError = con.error;
 		const origWarn = con.warn;
 		const origInfo = con.info;
+
+		type WritableLike = { write: (chunk: unknown) => boolean };
+		const stdout = process.stdout as WritableLike;
+		const stderr = process.stderr as WritableLike;
+		const origStdoutWrite = stdout.write;
+		const origStderrWrite = stderr.write;
 
 		const capture =
 			(stream: 'stdout' | 'stderr') =>
@@ -208,6 +264,45 @@ export class Executor {
 		con.error = capture('stderr');
 		con.warn = capture('stderr');
 		con.info = capture('stdout');
+
+		stdout.write = (chunk: unknown) => {
+			outputs.push({ stream: 'stdout', text: String(chunk) });
+			return true;
+		};
+		stderr.write = (chunk: unknown) => {
+			outputs.push({ stream: 'stderr', text: String(chunk) });
+			return true;
+		};
+
+		const g = globalThis as Record<string, unknown>;
+		const origDisplay = g.display;
+		const origPrompt = g.prompt;
+		const origConfirm = g.confirm;
+
+		g.display = async (
+			data: Record<string, string>,
+			opts: { display_id?: string; update?: boolean } = {},
+		) => {
+			const dd: DisplayData = {
+				data,
+				metadata: {},
+				transient: opts.display_id ? { display_id: opts.display_id } : {},
+				update: opts.update,
+			};
+			if (options?.publishDisplay) {
+				const p = options.publishDisplay(dd);
+				pendingDisplays.push(p);
+				await p;
+			} else displayData.push(dd);
+		};
+		if (options?.inputRequest) {
+			const req = options.inputRequest;
+			g.prompt = (prompt: string) => req(prompt, false);
+			g.confirm = async (prompt: string) => {
+				const v = await req(prompt, false);
+				return v?.toLowerCase() === 'y' || v?.toLowerCase() === 'yes';
+			};
+		}
 
 		let rejectFn!: (err: Error) => void;
 		const interruptPromise = new Promise<never>((_, r) => {
@@ -223,6 +318,7 @@ export class Executor {
 			} catch (error) {
 				const e = error as Error & { message?: string; name?: string };
 				return {
+					displayData,
 					error: {
 						message: e.message ?? String(error),
 						name: e.name ?? 'SyntaxError',
@@ -232,21 +328,22 @@ export class Executor {
 					success: false,
 				};
 			}
-
-			const result = evalCode(transformed);
+			const result = runCode(transformed);
 
 			if (result instanceof Promise) await Promise.race([result, interruptPromise]);
 
-			const value = globalThis.$result;
-			if (value !== undefined)
-				outputs.push({ stream: 'stdout', text: `${formatValue(value)}\n` });
+			let value = globalThis.$result;
 			globalThis.$result = undefined;
 
-			return { outputs, result: value, success: true };
+			await Promise.allSettled(pendingDisplays);
+			if (value instanceof Promise) value = await Promise.race([value, interruptPromise]);
+
+			return { displayData, outputs, result: value, success: true };
 		} catch (error) {
 			const e = error as Error & { message?: string };
 			if (e.message === 'Interrupted')
 				return {
+					displayData,
 					error: {
 						message: 'Execution interrupted',
 						name: 'KeyboardInterrupt',
@@ -257,6 +354,7 @@ export class Executor {
 				};
 
 			return {
+				displayData,
 				error: {
 					message: e.message ?? String(error),
 					name: e.name ?? 'Error',
@@ -270,6 +368,11 @@ export class Executor {
 			con.error = origError;
 			con.warn = origWarn;
 			con.info = origInfo;
+			g.display = origDisplay;
+			g.prompt = origPrompt;
+			g.confirm = origConfirm;
+			stdout.write = origStdoutWrite;
+			stderr.write = origStderrWrite;
 			this.rejectInterrupt = undefined;
 			this.executing = false;
 		}
@@ -295,7 +398,7 @@ export function complete(
 		const subExpr = expr.slice(0, dotIdx);
 		const propName = expr.slice(dotIdx + 1);
 		try {
-			const obj = evalCode(`(typeof (${subExpr}) !== 'undefined') ? (${subExpr}) : null`);
+			const obj = runCode(`(typeof (${subExpr}) !== 'undefined') ? (${subExpr}) : null`);
 			if (obj !== null && obj !== undefined) {
 				const proto = (Object.getPrototypeOf(obj) as object | null) ?? {};
 				const props = [
@@ -328,7 +431,7 @@ export function inspect(
 	if (!match) return { data: {}, found: false };
 	const expr = match[0];
 	try {
-		const value = evalCode(`(typeof (${expr}) !== 'undefined') ? (${expr}) : undefined`);
+		const value = runCode(`(typeof (${expr}) !== 'undefined') ? (${expr}) : undefined`);
 		if (value !== undefined) return { data: { 'text/plain': Bun.inspect(value) }, found: true };
 	} catch {
 		// Expression not yet defined

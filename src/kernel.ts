@@ -6,9 +6,9 @@
  */
 
 import { readFileSync } from 'node:fs';
-import type { StreamOutput } from '@/executor';
+import type { DisplayData, StreamOutput } from '@/executor';
 import type { JupyterHeader } from '@/protocol';
-import { Executor, complete, inspect } from '@/executor';
+import { Executor, complete, inspect, mimeBundle } from '@/executor';
 import { decodeMsg, makeEncoder, hmacVerify } from '@/protocol';
 import { PubSocket, RouterSocket, startHeartbeat } from '@/sockets';
 
@@ -140,6 +140,20 @@ export default async function startKernel(connectionFile: string): Promise<void>
 		);
 	}
 
+	async function publishDisplayData(
+		data: DisplayData,
+		parentHeader: JupyterHeader,
+	): Promise<void> {
+		const { update, ...displayContent } = data;
+		await iopub.send(
+			await encode(
+				update ? 'update_display_data' : 'display_data',
+				displayContent,
+				parentHeader,
+			),
+		);
+	}
+
 	async function publishError(
 		name: string,
 		value: string,
@@ -165,13 +179,63 @@ export default async function startKernel(connectionFile: string): Promise<void>
 		if (!silent && storeHistory) executionCount++;
 
 		await publishStatus('busy', parentHeader);
-		await iopub.send(
-			await encode('execute_input', { code, execution_count: executionCount }, parentHeader),
-		);
+		if (!silent)
+			await iopub.send(
+				await encode(
+					'execute_input',
+					{ code, execution_count: executionCount },
+					parentHeader,
+				),
+			);
 
-		const result = await executor.execute(code);
+		const inputRequest =
+			execContent.allow_stdin === false
+				? undefined
+				: async (prompt: string, password = false): Promise<string | undefined> => {
+						if (stdin.peerCount === 0)
+							await new Promise((r) => {
+								setTimeout(r, 100);
+							});
+						if (stdin.peerCount === 0) return undefined;
+						await stdin.sendAll(
+							await encode('input_request', { password, prompt }, parentHeader),
+						);
+						while (true) {
+							const { frames: replyFrames } = await stdin.recv();
+							try {
+								const reply = decodeMsg(replyFrames);
+								if (!(await hmacVerify(key, reply.signedParts, reply.sig)))
+									continue;
+								if (reply.header.msg_type === 'input_reply') {
+									const value = (reply.content as { value?: string }).value;
+									return typeof value === 'string' ? value : undefined;
+								}
+							} catch {
+								return undefined;
+							}
+						}
+					};
 
-		for (const output of result.outputs) await publishStream(output, parentHeader);
+		const result = await executor.execute(code, {
+			inputRequest,
+			publishDisplay: (data) => publishDisplayData(data, parentHeader),
+		});
+
+		if (!silent) {
+			for (const output of result.outputs) await publishStream(output, parentHeader);
+			if (result.success && result.result !== undefined)
+				await iopub.send(
+					await encode(
+						'execute_result',
+						{
+							data: mimeBundle(result.result),
+							execution_count: executionCount,
+							metadata: {},
+						},
+						parentHeader,
+					),
+				);
+		}
 
 		if (result.success)
 			await socket.send(
@@ -353,13 +417,5 @@ export default async function startKernel(connectionFile: string): Promise<void>
 		}
 	}
 
-	async function stdinLoop(): Promise<void> {
-		while (true) {
-			if (shuttingDown) break;
-			const { frames } = await stdin.recv();
-			void frames;
-		}
-	}
-
-	await Promise.all([shellLoop(), controlLoop(), stdinLoop()]);
+	await Promise.all([shellLoop(), controlLoop()]);
 }

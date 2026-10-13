@@ -64,12 +64,14 @@ function makeFrame(data: Uint8Array, more: boolean, isCommand = false): Uint8Arr
 	return buf;
 }
 
-async function drainIopubUntilIdle(): Promise<Array<string>> {
-	const out: Array<string> = [];
+type IopubMsg = { content: unknown; msgType: string };
+
+async function drainIopubUntilIdle(): Promise<Array<IopubMsg>> {
+	const out: Array<IopubMsg> = [];
 	while (true) {
 		const frames = await recvMultipart(iopub);
 		const msg = decodeMsg(frames);
-		out.push(msg.header.msg_type);
+		out.push({ content: msg.content, msgType: msg.header.msg_type });
 		const state = (msg.content as { execution_state?: string }).execution_state;
 		if (msg.header.msg_type === 'status' && state === 'idle') return out;
 	}
@@ -84,16 +86,17 @@ async function sendShell(msgType: string, content: unknown): Promise<ReturnType<
 
 async function executeCell(
 	code: string,
-): Promise<{ ok: boolean; reply: ReturnType<typeof decodeMsg> }> {
+	allowStdin = false,
+): Promise<{ iopubMsgs: Array<IopubMsg>; ok: boolean; reply: ReturnType<typeof decodeMsg> }> {
 	const iopubPromise = drainIopubUntilIdle();
 	const reply = await sendShell('execute_request', {
-		allow_stdin: false,
+		allow_stdin: allowStdin,
 		code,
 		silent: false,
 		store_history: true,
 	});
-	await iopubPromise;
-	return { ok: (reply.content as { status?: string }).status === 'ok', reply };
+	const iopubMsgs = await iopubPromise;
+	return { iopubMsgs, ok: (reply.content as { status?: string }).status === 'ok', reply };
 }
 
 beforeAll(async () => {
@@ -199,6 +202,126 @@ test('execute: error handling', async () => {
 	const { ok, reply } = await executeCell("throw new Error('intentional error');");
 	expect(ok).toBe(false);
 	expect((reply.content as { ename?: string }).ename).toBe('Error');
+});
+
+test('execute_result: bare expression sends MIME bundle', async () => {
+	const { iopubMsgs, ok } = await executeCell('1 + 1');
+	expect(ok).toBe(true);
+	const result = iopubMsgs.find((m) => m.msgType === 'execute_result');
+	expect(result).toBeDefined();
+	expect((result?.content as { data?: Record<string, string> })?.data?.['text/plain']).toBe('2');
+});
+
+test('display: sends display_data with MIME bundle', async () => {
+	const { iopubMsgs, ok } = await executeCell('display({ "text/html": "<b>hi</b>" })');
+	expect(ok).toBe(true);
+	const dd = iopubMsgs.find((m) => m.msgType === 'display_data');
+	expect(dd).toBeDefined();
+	expect((dd?.content as { data?: Record<string, string> })?.data?.['text/html']).toBe(
+		'<b>hi</b>',
+	);
+});
+
+test('display: as last expression sends no execute_result', async () => {
+	const { iopubMsgs, ok } = await executeCell("display({ 'text/plain': 'x' })");
+	expect(ok).toBe(true);
+	const result = iopubMsgs.find((m) => m.msgType === 'execute_result');
+	expect(result).toBeUndefined();
+});
+
+test('display: multiple displays sent immediately during execution', async () => {
+	const { iopubMsgs, ok } = await executeCell(
+		"display({ 'text/plain': 'first' }); display({ 'text/plain': 'second' }); 42",
+	);
+	expect(ok).toBe(true);
+	const ddMsgs = iopubMsgs.filter((m) => m.msgType === 'display_data');
+	expect(ddMsgs.length).toBe(2);
+	const result = iopubMsgs.find((m) => m.msgType === 'execute_result');
+	expect(result).toBeDefined();
+	expect((result?.content as { data?: Record<string, string> })?.data?.['text/plain']).toBe('42');
+});
+
+test('prompt: interactive input via stdin', async () => {
+	const stdinConn = await connect(IP, BASE_PORT + 3);
+	await zmtpHandshake(stdinConn, 'DEALER');
+
+	const iopubPromise = drainIopubUntilIdle();
+
+	const execFrames = await encode(
+		'execute_request',
+		{
+			allow_stdin: true,
+			code: 'const name = await prompt("Enter name:"); name;',
+			silent: false,
+			store_history: true,
+		},
+		makeHeader('execute_request'),
+	);
+	await sendFrames(shell, execFrames);
+
+	const stdinFrames = await recvMultipart(stdinConn);
+	const stdinMsg = decodeMsg(stdinFrames);
+	expect(stdinMsg.header.msg_type).toBe('input_request');
+
+	const replyFrames = await encode('input_reply', { value: 'Alice' });
+	await sendFrames(stdinConn, replyFrames);
+
+	const reply = decodeMsg(await recvMultipart(shell));
+	expect((reply.content as { status?: string }).status).toBe('ok');
+
+	const iopubMsgs = await iopubPromise;
+	const result = iopubMsgs.find((m) => m.msgType === 'execute_result');
+	expect(result).toBeDefined();
+	expect((result?.content as { data?: Record<string, string> })?.data?.['text/plain']).toBe(
+		'Alice',
+	);
+
+	stdinConn.close();
+});
+
+test('process.stdout.write capture', async () => {
+	const { iopubMsgs, ok } = await executeCell("process.stdout.write('raw stdout output')");
+	expect(ok).toBe(true);
+	const streamMsgs = iopubMsgs.filter((m) => m.msgType === 'stream');
+	const stdoutMsgs = streamMsgs.filter((m) => (m.content as { name?: string }).name === 'stdout');
+	const text = stdoutMsgs.map((m) => (m.content as { text?: string }).text).join('');
+	expect(text).toContain('raw stdout output');
+});
+
+test('process.stderr.write capture', async () => {
+	const { iopubMsgs, ok } = await executeCell("process.stderr.write('raw stderr output')");
+	expect(ok).toBe(true);
+	const streamMsgs = iopubMsgs.filter((m) => m.msgType === 'stream');
+	const stderrMsgs = streamMsgs.filter((m) => (m.content as { name?: string }).name === 'stderr');
+	const text = stderrMsgs.map((m) => (m.content as { text?: string }).text).join('');
+	expect(text).toContain('raw stderr output');
+});
+
+test('update_display_data: sends update_display_data with display_id', async () => {
+	const { iopubMsgs, ok } = await executeCell(
+		'display({ "text/html": "<p>v1</p>" }, { display_id: "myid" })',
+	);
+	expect(ok).toBe(true);
+	const dd = iopubMsgs.find((m) => m.msgType === 'display_data');
+	expect(dd).toBeDefined();
+	expect((dd?.content as { transient?: { display_id?: string } })?.transient?.display_id).toBe(
+		'myid',
+	);
+});
+
+test('update_display_data: update flag sends update_display_data', async () => {
+	const { iopubMsgs, ok } = await executeCell(
+		'display({ "text/html": "<p>v2</p>" }, { display_id: "myid", update: true })',
+	);
+	expect(ok).toBe(true);
+	const update = iopubMsgs.find((m) => m.msgType === 'update_display_data');
+	expect(update).toBeDefined();
+	expect(
+		(update?.content as { transient?: { display_id?: string } })?.transient?.display_id,
+	).toBe('myid');
+	expect((update?.content as { data?: Record<string, string> })?.data?.['text/html']).toBe(
+		'<p>v2</p>',
+	);
 });
 
 test('complete_request', async () => {
