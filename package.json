@@ -1,13 +1,37 @@
 {
 	"name": "jupyter-bun",
 	"version": "0.1.0",
-	"description": "TypeScript Jupyter kernel powered by Bun.",
+	"description": "JavaScript/TypeScript Jupyter kernel powered by Bun.",
+	"keywords": [
+		"bun",
+		"javascript",
+		"jupyter-kernel",
+		"jupyter-notebook",
+		"typescript"
+	],
+	"homepage": "https://github.com/hesprs/jupyter-bun",
+	"bugs": {
+		"url": "https://github.com/hesprs/jupyter-bun/issues"
+	},
 	"license": "MIT",
-	"bin": "dist/index.ts",
+	"author": {
+		"name": "Hēsperus",
+		"url": "https://hesprs.github.io"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/hesprs/jupyter-bun.git"
+	},
+	"bin": "dist/index.js",
 	"files": [
 		"dist"
 	],
 	"type": "module",
+	"sideEffects": false,
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
 	"scripts": {
 		"compile": "bun --bun tsdown",
 		"fix": "oxlint --silent --fix && oxfmt",
@@ -23,5 +47,6 @@
 		"oxlint-tsgolint": "^7.0.2004",
 		"tsdown": "^0.23.1",
 		"typescript": "^7.0.2"
-	}
+	},
+	"packageManager": "bun@1.4.2"
 }
