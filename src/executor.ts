@@ -74,7 +74,7 @@ export function mimeBundle(value: unknown): Record<string, string> {
 	if (value !== null && (typeof value === 'object' || typeof value === 'function')) {
 		const fn = (value as Record<symbol, unknown>)[JUPYTER_DISPLAY];
 		if (typeof fn === 'function') {
-			const bundle = (fn as () => unknown)();
+			const bundle = (fn as () => unknown).call(value);
 			if (bundle && typeof bundle === 'object') return bundle as Record<string, string>;
 		}
 	}
